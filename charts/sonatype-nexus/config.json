@@ -1,0 +1,12 @@
+{
+  "app": {
+    "name": "nexus",
+    "revision": "HEAD",
+    "path": "charts/sonatype-nexus",
+    "values": {
+      "persistence": {
+        "storageSize": "16Gi"
+      }
+    }
+  }
+}
