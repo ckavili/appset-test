@@ -1,0 +1,46 @@
+{{- define "config-nexus" }}
+#!/bin/bash
+
+# a standalone script for testing - see setup-nexus-job.yaml for embedded k8s version
+
+NS=$(cat /run/secrets/kubernetes.io/serviceaccount/namespace)
+NEXUS_USER=admin:admin123
+NEXUS_URL=https://$(oc -n ${NS} get route nexus -o custom-columns=ROUTE:.spec.host --no-headers)
+
+echo "waiting for nexus pod ready..."
+oc -n ${NS} wait pod -lapp="{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}" --for=condition=Ready --timeout=600s || exit $?
+sleep 2
+
+# helm hosted via rest
+echo "creating {{ .Values.helmRepository | default "helm-charts" }} helm hosted repo"
+curl -s -k -X POST "${NEXUS_URL}/service/rest/beta/repositories/helm/hosted" \
+  --user "${NEXUS_USER}" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d "{ \"name\": \"{{ .Values.helmRepository | default "helm-charts" }}\", \"online\": true, \"storage\": { \"blobStoreName\": \"default\", \"strictContentTypeValidation\": true, \"writePolicy\": \"ALLOW\" }}"
+
+# npm proxy
+echo "creating {{ .Values.npmRepository | default "labs-npm" }} npm proxy"
+curl -s -k -X POST "${NEXUS_URL}/service/rest/beta/repositories/npm/proxy" \
+  --user "${NEXUS_USER}" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d "{ \"name\": \"{{ .Values.npmRepository | default "labs-npm" }}\", \"online\": true, \"storage\": { \"blobStoreName\": \"default\", \"strictContentTypeValidation\": true}, \"proxy\": { \"remoteUrl\": \"https://registry.npmjs.org\", \"contentMaxAge\": 1440, \"metadataMaxAge\": 1440 }, \"httpClient\": { \"blocked\": false, \"autoBlock\": false, \"connection\": { \"retries\": 0, \"userAgentSuffix\": \"string\", \"timeout\": 60, \"enableCircularRedirects\": false, \"enableCookies\": false}}, \"negativeCache\": { \"enabled\": false, \"timeToLive\": 1440 } }"
+
+# raw hosted via rest
+echo "creating {{ .Values.rawRepository | default "labs-static" }} raw hosted repo"
+curl -s -k -X POST "${NEXUS_URL}/service/rest/beta/repositories/raw/hosted" \
+  --user "${NEXUS_USER}" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d "{ \"name\": \"{{ .Values.rawRepository | default "labs-static" }}\", \"online\": true, \"storage\": { \"blobStoreName\": \"default\", \"strictContentTypeValidation\": true, \"writePolicy\": \"ALLOW\" }}"
+
+# disable anonymous access by not running onboarding
+oc -n ${NS} exec $(oc -n ${NS} get pods -o custom-columns=NAME:.metadata.name --no-headers -lapp="{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}") -- bash -c 'if ! grep -q "nexus.onboarding.enabled" /nexus-data/etc/nexus.properties; then echo "nexus.onboarding.enabled=false" >> /nexus-data/etc/nexus.properties; fi'
+
+echo "restarting nexus..."
+oc -n ${NS} delete pod -lapp="{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}"
+oc -n ${NS} wait pod -lapp="{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}" --for=condition=Ready --timeout=300s
+
+echo "Done!"
+{{- end}}
